@@ -27,18 +27,19 @@ class QLearnAlgo[S, A](learningRate: Fraction, discountFactor: Fraction, randomA
 
   def train(trainingData: Seq[(S, Double)])(implicit ar: Randomizer[A], es: Enumerate[S], da: ChooseDefault[A]): Q[S, A] = {
 
-    def go(experience: (S, Double), data: Seq[(S, Double)], qcurr: Q[S, A])(implicit ar: Randomizer[A], es: Enumerate[S], da: ChooseDefault[A]): Q[S, A] = data match {
+    def go(experience: (S, Double), data: Seq[(S, Double)], qcurr: Q[S, A])(implicit ar: Randomizer[A]): Q[S, A] = data match {
       case (nextState, nextReward) +: tail => {
         val (state, reward) = experience
         val action = if (chooseNextActionDeterministically) {
-          qcurr.m(state).maxBy(_._2)._1
+          qcurr.m(nextState).maxBy(_._2)._1
         } else {
           ar.sample()
         }
         val qUpdate = for {
-          value <-  qcurr.m(state).get(action)
-          learned = reward + (discountFactor * value)
-        } yield (1.0 - learningRate) * value + learningRate * learned
+          maxValue <-  qcurr.m(nextState).get(action)
+          currValue <- qcurr.m(state).get(action)
+          learned = reward + (discountFactor * maxValue)
+        } yield (1.0 - learningRate) * currValue + learningRate * learned
         go((nextState, nextReward), tail, qcurr.update(state, action, qUpdate.getOrElse(0.0)))
       }
       case _ => qcurr
@@ -63,7 +64,7 @@ object QLearnAlgo {
     }
 
     implicit val intE = new Enumerate[Int] {
-      override def getAll(): Seq[Int] = (1 to 10)
+      override def getAll(): Seq[Int] = 1 to 10
     }
 
     val trainingSet = (1 to 100).map(n => ((n % 10) + 1, n.toDouble + 0.03))
@@ -73,6 +74,6 @@ object QLearnAlgo {
     println("Q")
     println(q.m)
     println("Policy")
-    println(policy)
+    println(policy.toList.sortBy(_._1))
   }
 }
