@@ -12,6 +12,8 @@ class Q[S, A] private(val m : Map[S, Map[A, Double]]) {
       m.updated(s,
         m.get(s).fold(Map(a -> v))(_.updated(a, v))
       ))
+
+  def greedyAction(s: S): A = m(s).maxBy(_._2)._1
 }
 
 object Q{

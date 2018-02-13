@@ -3,16 +3,26 @@ package net.gianlorenzo.scalaqtrader.learning
 import net.gianlorenzo.scalaqtrader.model.{Fraction, Q}
 
 
-trait Randomizer[+T]{
+trait Randomizer[+T] {
   def sample(): T
 }
 
-trait Enumerate[+T]{
-  def getAll(): Seq[T]
+trait Enumerate[T] {
+  def getAll(): Set[T]
 }
 
-trait ChooseDefault[+T]{
+trait ChooseDefault[+T] {
   def default: T
+}
+
+final case class Experience[+S](state: S, reward: Double)
+
+trait Environment[+S, -A] {
+  def evolve(action: A): (Environment[S, A], Experience[S])
+}
+
+trait HasTerminal[+S] {
+  def terminal: S
 }
 
 class QLearnAlgo[S, A](learningRate: Fraction, discountFactor: Fraction, randomActionFraction: Fraction) {
@@ -23,53 +33,97 @@ class QLearnAlgo[S, A](learningRate: Fraction, discountFactor: Fraction, randomA
 
   private def chooseNextActionDeterministically: Boolean = actionChooserRandomiser.nextDouble() > 1.0 - randomActionFraction
 
-  def initQ(implicit es: Enumerate[S], da: ChooseDefault[A]): Q[S, A] = es.getAll().foldLeft(Q.empty[S, A]){case (q, s) => q.update(s, da.default, 0.0)}
+  private def initQ(implicit es: Enumerate[S], ea: Enumerate[A]): Q[S, A] = (for {
+    s <- es.getAll()
+    a <- ea.getAll()
+  } yield (s, a)).foldLeft(Q.empty[S, A]) { case (q, (s, a)) => q.update(s, a, 0.0) }
 
-  def train(trainingData: Seq[(S, Double)])(implicit ar: Randomizer[A], es: Enumerate[S], da: ChooseDefault[A]): Q[S, A] = {
 
-    def go(experience: (S, Double), data: Seq[(S, Double)], qcurr: Q[S, A])(implicit ar: Randomizer[A], es: Enumerate[S], da: ChooseDefault[A]): Q[S, A] = data match {
-      case (nextState, nextReward) +: tail => {
-        val (state, reward) = experience
-        val action = if (chooseNextActionDeterministically) {
-          qcurr.m(state).maxBy(_._2)._1
-        } else {
-          ar.sample()
-        }
-        val qUpdate = for {
-          value <-  qcurr.m(state).get(action)
-          learned = reward + (discountFactor * value)
-        } yield (1.0 - learningRate) * value + learningRate * learned
-        go((nextState, nextReward), tail, qcurr.update(state, action, qUpdate.getOrElse(0.0)))
-      }
-      case _ => qcurr
+  private def epsGreedy(currState: S, q: Q[S, A])(implicit ar: Randomizer[A]) = if (chooseNextActionDeterministically) {
+    q.greedyAction(currState)
+  } else {
+    ar.sample()
+  }
+
+  def train(environment: Environment[S, A])(implicit ar: Randomizer[A], es: Enumerate[S], da: Enumerate[A], sf: HasTerminal[S]): Q[S, A] = {
+
+    def go(currState: S, env: Environment[S, A], qcurr: Q[S, A])(implicit ar: Randomizer[A], sf: HasTerminal[S]): Q[S, A] = {
+
+      val action = epsGreedy(currState, qcurr)
+
+      val (newEnv, Experience(nextState, reward)) = env.evolve(action)
+
+      val qUpdate = for {
+        value <- qcurr.m(nextState).get(action)
+        learned = reward + (discountFactor * value)
+        prevValue <- qcurr.m(currState).get(action)
+      } yield prevValue + learningRate * (learned - prevValue)
+
+      val newQ =  qcurr.update(currState, action, qUpdate.getOrElse(0.0))
+
+      if (nextState == sf.terminal) newQ else go(nextState, newEnv, newQ)
     }
 
-    go(trainingData.head, trainingData.tail, initQ)
+
+    (1 to 10013).foldLeft(initQ){ case (q, _) =>
+      val (newEnv, Experience(initState, _)) = environment.evolve(ar.sample())
+      go(initState, newEnv, q)
+    }
   }
+
 }
 
 
+
+final case class SimpleEnv private(internalState: Int) extends Environment[Int, Int] {
+
+  private def newState(action: Int): Int = {
+    val nextState = (action + internalState) % 10
+    if (nextState < 0) nextState + 10
+    else
+      if (nextState == 0) 10
+      else
+      nextState
+  }
+
+  override def evolve(action: Int): (Environment[Int, Int], Experience[Int]) = (SimpleEnv(newState(action)), Experience(newState(action), if (newState(action) == 10) 0 else -1))
+}
+
+object SimpleEnv{
+  def create: SimpleEnv = SimpleEnv(1)
+}
+
 object QLearnAlgo {
   def main(args: Array[String]): Unit = {
-    val qlearner = new QLearnAlgo[Int, Int](Fraction(0.8), Fraction(0.2), Fraction(0.01))
+    val qlearner = new QLearnAlgo[Int, Int](Fraction(0.8), Fraction(0.2), Fraction(0.25))
 
-    implicit val intR = new Randomizer[Int] {
+    val intR = new Randomizer[Int] {
       private val rnd = new scala.util.Random()
-      override def sample(): Int = 2-rnd.nextInt(5)
+
+      override def sample(): Int = rnd.nextInt(5) - 2
     }
 
-    implicit val intD = new ChooseDefault[Int] {
+    val intD = new ChooseDefault[Int] {
       override def default: Int = 0
     }
 
-    implicit val intE = new Enumerate[Int] {
-      override def getAll(): Seq[Int] = (1 to 10)
+    val intE = new Enumerate[Int] {
+      override def getAll(): Set[Int] = 1 to 10 toSet
     }
 
-    val trainingSet = (1 to 100).map(n => ((n % 10) + 1, n.toDouble + 0.03))
-    val q = qlearner.train(trainingSet)
+    val intHF = new HasTerminal[Int] {
+      override def terminal: Int = 10
+    }
 
-    val policy = q.m.mapValues(av => av.maxBy(_._2)._1)
+    val env = SimpleEnv.create
+
+    val q = qlearner.train(env)(ar = intR,
+      es = intE, da = new Enumerate[Int] {
+        override def getAll(): Set[Int] = -2 to 2 toSet
+      }, sf = intHF)
+
+    println((1 to 20).scanLeft(SimpleEnv.create.asInstanceOf[Environment[Int, Int]]){ case (s, _) => s.evolve(1)._1})
+    val policy = q.m.mapValues(av => av.maxBy(_._2)._1).toList.sortBy(_._1)
     println("Q")
     println(q.m)
     println("Policy")
