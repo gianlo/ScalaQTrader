@@ -65,7 +65,7 @@ class QLearnAlgo[S, A](learningRate: Fraction, discountFactor: Fraction, randomA
     }
 
 
-    (1 to 10013).foldLeft(initQ){ case (q, _) =>
+    (1 to 1000).foldLeft(initQ){ case (q, _) =>
       val (newEnv, Experience(initState, _)) = environment.evolve(ar.sample())
       go(initState, newEnv, q)
     }
@@ -79,10 +79,9 @@ final case class SimpleEnv private(internalState: Int) extends Environment[Int, 
 
   private def newState(action: Int): Int = {
     val nextState = (action + internalState) % 10
-    if (nextState < 0) nextState + 10
+    if (nextState <= 0)
+      nextState + 10
     else
-      if (nextState == 0) 10
-      else
       nextState
   }
 
@@ -95,7 +94,7 @@ object SimpleEnv{
 
 object QLearnAlgo {
   def main(args: Array[String]): Unit = {
-    val qlearner = new QLearnAlgo[Int, Int](Fraction(0.8), Fraction(0.2), Fraction(0.25))
+    val qlearner = new QLearnAlgo[Int, Int](Fraction(0.8), Fraction(0.2), Fraction(0.001))
 
     val intR = new Randomizer[Int] {
       private val rnd = new scala.util.Random()
@@ -125,7 +124,7 @@ object QLearnAlgo {
     println((1 to 20).scanLeft(SimpleEnv.create.asInstanceOf[Environment[Int, Int]]){ case (s, _) => s.evolve(1)._1})
     val policy = q.m.mapValues(av => av.maxBy(_._2)._1).toList.sortBy(_._1)
     println("Q")
-    println(q.m)
+    println(q.m.mapValues(_.toList.sortBy(_._1)).toList.sortBy(_._1))
     println("Policy")
     println(policy)
   }
